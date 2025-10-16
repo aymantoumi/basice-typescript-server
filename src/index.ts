@@ -4,6 +4,7 @@ import 'dotenv/config';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import { eq } from 'drizzle-orm';
 import { usersTable } from './db/schema.ts';
+import { getAllProducts, createProduct } from './controllers/productsController.ts';
 
 import dotenv from "dotenv";
 
@@ -46,6 +47,34 @@ app.post('/', async (req: Request, res: Response) => {
        
   }
 })
+
+app.get('/products', async (req, res) => {
+  try {
+    let products = await getAllProducts();
+
+    res.send(products);
+
+  } catch (error) {
+    console.error(error);
+  }
+})
+
+app.post('/product', async (req, res) => {
+  const { name, price, discreption } = req.body;
+  console.log(req.body);
+  
+  try {
+    
+    let products = await createProduct(name, price, discreption);
+
+    console.log(`product ${name} has been created`);
+   
+    res.send(product);
+  } catch (error) {
+   console.error(error);
+   res.send(error)
+  }
+});
 
 app.listen(port, () => {
   console.log(`app works on http://localhost:${port}`);
