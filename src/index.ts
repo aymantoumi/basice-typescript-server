@@ -4,7 +4,7 @@ import 'dotenv/config';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import { eq } from 'drizzle-orm';
 import { usersTable } from './db/schema.ts';
-import { getAllProducts, createProduct } from './controllers/productsController.ts';
+import { getAllProducts, createProduct, updateProduct, productDelete } from './controllers/productsController.ts';
 
 import dotenv from "dotenv";
 
@@ -69,12 +69,46 @@ app.post('/product', async (req, res) => {
 
     console.log(`product ${name} has been created`);
    
-    res.send(product);
+    res.send(products);
   } catch (error) {
    console.error(error);
    res.send(error)
   }
 });
+
+app.patch('/product/:product_id', async (req, res) => {
+  console.log(req.body);
+  let product_id = parseInt(req.params.product_id);
+  try {
+    const product_result = updateProduct(req.body, product_id)
+   res.send(product_result)
+  } catch (error) {
+    console.error(error);
+    console.log('somehting went wrong ');    
+  }
+})
+
+app.delete('/product/:product_id', async (req, res) => {
+  try {
+    const p_id = parseInt(req.params.product_id)
+
+    const result = await productDelete(p_id)
+
+    if (!result) {
+      res.send({
+        'error': `The product ${p_id} doesn't exists`
+      })
+    }
+
+    res.send({
+      "product_id": p_id,
+      "status_code": 200 
+    })
+  } catch (error) {
+    console.error(error);
+    
+  }
+})
 
 app.listen(port, () => {
   console.log(`app works on http://localhost:${port}`);
