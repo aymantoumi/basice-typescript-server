@@ -20,7 +20,9 @@
     "isolatedModules": true,
     "noUncheckedSideEffectImports": true,
     "moduleDetection": "force",
-    "skipLibCheck": true
+    "skipLibCheck": true,
+    "allowImportingTsExtensions": true,
+    "noEmit": true // or "emitDeclarationOnly": true
   },
     "include":["src/**/*.ts"],
     "exclude":["node_modules"]
