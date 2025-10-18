@@ -8,6 +8,34 @@
       "when": 1760609248530,
       "tag": "0000_closed_sumo",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1760695384429,
+      "tag": "0001_amused_spitfire",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1760700450656,
+      "tag": "0002_damp_baron_zemo",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1760791380420,
+      "tag": "0003_slippery_northstar",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1760791754189,
+      "tag": "0004_dusty_legion",
+      "breakpoints": true
     }
   ]
 }

@@ -1,0 +1,191 @@
+import type { Request, Response, Application } from 'express';
+import jwt from 'jsonwebtoken';
+import { hash, compare } from 'bcryptjs';
+import { usersTable } from "../db/schema.ts";
+import { drizzle } from 'drizzle-orm/node-postgres';
+import { eq } from 'drizzle-orm';
+
+const db = drizzle(process.env.DATABASE_URL!);
+const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key';
+
+type SignupPayload = {
+  name: string;
+  email: string;
+  password: string;
+  age?: number;
+};
+
+type LoginPayload = {
+  email: string;
+  password: string;
+};
+
+export const signup = async (req: Request, res: Response) => {
+  try {
+    const { name, email, password, age }: SignupPayload = req.body;
+
+    // Validate required fields
+    if (!name || !email || !password) {
+      return res.status(400).json({ 
+        error: 'Name, email, and password are required' 
+      });
+    }
+
+    // Check if user already exists
+    const existingUsers = await db
+      .select()
+      .from(usersTable)
+      .where(eq(usersTable.email, email))
+      .limit(1);
+
+    if (existingUsers.length > 0) {
+      return res.status(409).json({ 
+        error: 'User with this email already exists' 
+      });
+    }
+
+    // Hash password
+    const hashedPassword = await hash(password, 12);
+
+    // Create user
+    const user: typeof usersTable.$inferInsert = {
+      name,
+      email,
+      password: hashedPassword,
+      age: age || null,
+    };
+
+    const result = await db.insert(usersTable)
+      .values(user)
+      .returning();
+
+    const createdUser = result[0];
+
+    // Generate JWT token
+    const token = jwt.sign(
+      { 
+        userId: createdUser.id,
+        email: createdUser.email 
+      },
+      JWT_SECRET,
+      { expiresIn: '24h' }
+    );
+
+    // Remove password from response
+    const { password: _, ...userWithoutPassword } = createdUser;
+
+    res.status(201).json({
+      message: 'User created successfully',
+      user: userWithoutPassword,
+      token
+    });
+
+  } catch (error) {
+    console.error('Signup error:', error);
+    res.status(500).json({ error: 'Failed to create user' });
+  }
+};
+
+export const login = async (req: Request, res: Response) => {
+  try {
+    const { email, password }: LoginPayload = req.body;
+
+    // Validate required fields
+    if (!email || !password) {
+      return res.status(400).json({ 
+        error: 'Email and password are required' 
+      });
+    }
+
+    // Find user by email
+    const users = await db
+      .select()
+      .from(usersTable)
+      .where(eq(usersTable.email, email))
+      .limit(1);
+
+    if (users.length === 0) {
+      return res.status(401).json({ 
+        error: 'Invalid email or password' 
+      });
+    }
+
+    const user = users[0];
+
+    // Verify password
+    const isPasswordValid = await compare(password, user.password);
+    if (!isPasswordValid) {
+      return res.status(401).json({ 
+        error: 'Invalid email or password' 
+      });
+    }
+
+    // Generate JWT token
+    const token = jwt.sign(
+      { 
+        userId: user.id,
+        email: user.email 
+      },
+      JWT_SECRET,
+      { expiresIn: '24h' }
+    );
+
+    // Remove password from response
+    const { password: _, ...userWithoutPassword } = user;
+
+    res.json({
+      message: 'Login successful',
+      user: userWithoutPassword,
+      token
+    });
+
+  } catch (error) {
+    console.error('Login error:', error);
+    res.status(500).json({ error: 'Failed to login' });
+  }
+};
+
+// Middleware to verify JWT token
+export const authenticateToken = (req: Request, res: Response, next: Function) => {
+  const authHeader = req.headers['authorization'];
+  const token = authHeader && authHeader.split(' ')[1]; // Bearer TOKEN
+
+  if (!token) {
+    return res.status(401).json({ error: 'Access token required' });
+  }
+
+  jwt.verify(token, JWT_SECRET, (err: any, user: any) => {
+    if (err) {
+      return res.status(403).json({ error: 'Invalid or expired token' });
+    }
+    
+    (req as any).user = user;
+    next();
+  });
+};
+
+// Get current user profile (protected route)
+export const getProfile = async (req: Request, res: Response) => {
+  try {
+    const user = (req as any).user;
+    
+    const users = await db
+      .select()
+      .from(usersTable)
+      .where(eq(usersTable.id, user.userId))
+      .limit(1);
+
+    if (users.length === 0) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    const userData = users[0];
+    const { password: _, ...userWithoutPassword } = userData;
+
+    res.json({ user: userWithoutPassword });
+    
+  } catch (error) {
+    console.error('Get profile error:', error);
+    res.status(500).json({ error: 'Failed to get profile' });
+  }
+};
