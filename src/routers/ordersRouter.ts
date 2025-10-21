@@ -1,20 +1,26 @@
-import express from 'express';
+import { Router } from 'express';
 import {
   createOrder,
   getAllOrders,
   getOrderById,
   getOrdersByUserId,
   updateOrder,
+  addProductToOrder,
+  removeProductFromOrder,
   deleteOrder
 } from '../controllers/ordersController.ts';
 
-const ordersRouter = express.Router();
+import { authenticateToken } from '../middleware/authMiddleware.ts'
 
-ordersRouter.post('/create', createOrder);
-ordersRouter.get('/get-orders', getAllOrders);
-ordersRouter.get('/:order_id', getOrderById);
-ordersRouter.get('/user/:user_id', getOrdersByUserId);
+const ordersRouter = Router();
+
+ordersRouter.post('/', authenticateToken, createOrder);
+ordersRouter.get('/', authenticateToken, getAllOrders);
+ordersRouter.get('/:order_id', authenticateToken, getOrderById);
+ordersRouter.get('/user/:user_id', authenticateToken, getOrdersByUserId);
 ordersRouter.put('/:order_id', updateOrder);
-ordersRouter.delete('/:order_id', deleteOrder);
+ordersRouter.post('/:order_id/products', authenticateToken, addProductToOrder);
+ordersRouter.delete('/:order_id/products/:product_id', authenticateToken, removeProductFromOrder);
+ordersRouter.delete('/:order_id', authenticateToken, deleteOrder);
 
-export { ordersRouter };
+export default ordersRouter;

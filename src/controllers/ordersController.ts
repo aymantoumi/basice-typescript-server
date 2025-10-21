@@ -1,113 +1,153 @@
-import type { Request, Response, Application } from 'express';
-import { ordersTable, productsTable, usersTable } from "../db/schema.ts";
+import type { Request, Response } from 'express';
+import { ordersTable, productsTable, usersTable, orderProductsTable } from "../db/schema.ts";
 import { drizzle } from "drizzle-orm/node-postgres";
-import { eq, and } from "drizzle-orm";
+import { eq } from "drizzle-orm";
+import jwt from 'jsonwebtoken';
 
 const db = drizzle(process.env.DATABASE_URL!);
+const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key';
 
-type OrderPayload = {
+interface OrderProduct {
   product_id: number;
-  user_id: number;
-  quantity: number;
-};
+  quantity?: number || 1;
+}
 
-type OrderUpdatePayload = Partial<OrderPayload>;
+interface CreateOrderRequest {
+  user_address: string;
+  products: OrderProduct[];
+}
 
-// Create a new order
-export const createOrder = async (req: Request, res: Response) => {
+type OrderUpdatePayload = Partial<CreateOrderRequest>;
+
+function getUserIdFromToken(req: Request): number | null {
+  const authHeader = req.headers['authorization'];
+  const token = authHeader && authHeader.split(' ')[1];
+
+  if (!token) {
+    return null;
+  }
+
   try {
-    const { product_id, user_id, quantity }: OrderPayload = req.body;
-
-    // Validate required fields
-    if (!product_id || !user_id || !quantity) {
-      return res.status(400).json({ 
-        error: 'product_id, user_id, and quantity are required' 
-      });
-    }
-
-    // Check if user exists
-    const user = await db
-      .select()
-      .from(usersTable)
-      .where(eq(usersTable.id, user_id))
-      .limit(1);
-
-    if (user.length === 0) {
-      return res.status(404).json({ error: 'User not found' });
-    }
-
-    // Check if product exists
-    const product = await db
-      .select()
-      .from(productsTable)
-      .where(eq(productsTable.id, product_id))
-      .limit(1);
-
-    if (product.length === 0) {
-      return res.status(404).json({ error: 'Product not found' });
-    }
-
-    // Validate quantity
-    if (quantity <= 0) {
-      return res.status(400).json({ error: 'Quantity must be greater than 0' });
-    }
-
-    // Create order
-    const order: typeof ordersTable.$inferInsert = {
-      product_id,
-      user_id,
-      quantity,
-    };
-
-    const result = await db.insert(ordersTable)
-      .values(order)
-      .returning();
-
-    return res.status(201).json({
-      message: 'Order created successfully',
-      order: result[0]
-    });
-
+    const decoded = jwt.verify(token, JWT_SECRET) as any;
+    return decoded.userId;
   } catch (error) {
-    console.error('Create order error:', error);
-    return res.status(500).json({ error: 'Failed to create order' });
+    return null;
   }
 }
 
-// Get all orders
+export const createOrder = async (req: Request, res: Response) => {
+  try {
+    const userId = getUserIdFromToken(req);
+    
+    if (!userId) {
+      return res.status(401).json({ error: "User not authenticated" });
+    }
+
+    const { user_address, products }: CreateOrderRequest = req.body;
+
+    if (!user_address || !products || !Array.isArray(products) || products.length === 0) {
+      return res.status(400).json({ 
+        error: "User address and products array are required" 
+      });
+    }
+
+    const productIds = products.map(p => p.product_id);
+    const existingProducts = await db
+      .select()
+      .from(productsTable)
+      .where(eq(productsTable.id, productIds[0]));
+
+    if (existingProducts.length === 0) {
+      return res.status(404).json({ error: "One or more products not found" });
+    }
+
+    const result = await db.transaction(async (tx) => {
+      const [newOrder] = await tx
+        .insert(ordersTable)
+        .values({
+          user_id: userId,
+          user_address: user_address,
+        })
+        .returning();
+
+      const orderProductsData = products.map(product => ({
+        order_id: newOrder.id,
+        product_id: product.product_id,
+        quantity: product.quantity || 1,
+      }));
+
+      const insertedOrderProducts = await tx
+        .insert(orderProductsTable)
+        .values(orderProductsData)
+        .returning();
+
+      return {
+        order: newOrder,
+        orderProducts: insertedOrderProducts,
+      };
+    });
+
+    return res.status(201).json({
+      message: "Order created successfully",
+      data: result,
+    });
+
+  } catch (error) {
+    console.error("Error creating order:", error);
+    return res.status(500).json({ error: "Internal server error" });
+  }
+}
+
 export const getAllOrders = async (req: Request, res: Response) => {
   try {
+    const userId = getUserIdFromToken(req);
+    
     const orders = await db
-      .select()
+      .select({
+        order: ordersTable,
+        user: usersTable,
+      })
       .from(ordersTable)
-      .leftJoin(usersTable, eq(ordersTable.user_id, usersTable.id))
-      .leftJoin(productsTable, eq(ordersTable.product_id, productsTable.id));
+      .leftJoin(usersTable, eq(ordersTable.user_id, usersTable.id));
 
-    const formattedOrders = orders.map(order => ({
-      id: order.orders.id,
-      quantity: order.orders.quantity,
-      order_date: order.orders.order_date,
-      user: {
-        id: order.users?.id,
-        name: order.users?.name,
-        email: order.users?.email
-      },
-      product: {
-        id: order.products?.id,
-        name: order.products?.name,
-        price: order.products?.price,
-        description: order.products?.description
-      }
-    }));
+    const ordersWithProducts = await Promise.all(
+      orders.map(async (orderData) => {
+        const orderProducts = await db
+          .select({
+            product: productsTable,
+            quantity: orderProductsTable.quantity,
+          })
+          .from(orderProductsTable)
+          .where(eq(orderProductsTable.order_id, orderData.order.id))
+          .leftJoin(productsTable, eq(orderProductsTable.product_id, productsTable.id));
 
-    return res.json({ orders: formattedOrders });
+        return {
+          id: orderData.order.id,
+          user_address: orderData.order.user_address,
+          order_date: orderData.order.order_date,
+          user: orderData.user ? {
+            id: orderData.user.id,
+            name: orderData.user.name,
+            email: orderData.user.email
+          } : null,
+          products: orderProducts.map(op => ({
+            id: op.product?.id,
+            name: op.product?.name,
+            price: op.product?.price,
+            description: op.product?.description,
+            quantity: op.quantity
+          }))
+        };
+      })
+    );
+
+    return res.json({ orders: ordersWithProducts });
   } catch (error) {
     console.error('Get all orders error:', error);
     return res.status(500).json({ error: 'Failed to fetch orders' });
   }
 }
 
-// Get order by ID
 export const getOrderById = async (req: Request, res: Response) => {
   try {
     const order_id = parseInt(req.params.order_id);
@@ -116,34 +156,45 @@ export const getOrderById = async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'Invalid order ID' });
     }
 
-    const orders = await db
-      .select()
+    const orderData = await db
+      .select({
+        order: ordersTable,
+        user: usersTable,
+      })
       .from(ordersTable)
       .leftJoin(usersTable, eq(ordersTable.user_id, usersTable.id))
-      .leftJoin(productsTable, eq(ordersTable.product_id, productsTable.id))
       .where(eq(ordersTable.id, order_id))
       .limit(1);
 
-    if (orders.length === 0) {
+    if (orderData.length === 0) {
       return res.status(404).json({ error: 'Order not found' });
     }
 
-    const order = orders[0];
+    const orderProducts = await db
+      .select({
+        product: productsTable,
+        quantity: orderProductsTable.quantity,
+      })
+      .from(orderProductsTable)
+      .where(eq(orderProductsTable.order_id, order_id))
+      .leftJoin(productsTable, eq(orderProductsTable.product_id, productsTable.id));
+
     const formattedOrder = {
-      id: order.orders.id,
-      quantity: order.orders.quantity,
-      order_date: order.orders.order_date,
-      user: {
-        id: order.users?.id,
-        name: order.users?.name,
-        email: order.users?.email
-      },
-      product: {
-        id: order.products?.id,
-        name: order.products?.name,
-        price: order.products?.price,
-        description: order.products?.description
-      }
+      id: orderData[0].order.id,
+      user_address: orderData[0].order.user_address,
+      order_date: orderData[0].order.order_date,
+      user: orderData[0].user ? {
+        id: orderData[0].user.id,
+        name: orderData[0].user.name,
+        email: orderData[0].user.email
+      } : null,
+      products: orderProducts.map(op => ({
+        id: op.product?.id,
+        name: op.product?.name,
+        price: op.product?.price,
+        description: op.product?.description,
+        quantity: op.quantity
+      }))
     };
 
     return res.json({ order: formattedOrder });
@@ -153,7 +204,6 @@ export const getOrderById = async (req: Request, res: Response) => {
   }
 }
 
-// Get orders by user ID
 export const getOrdersByUserId = async (req: Request, res: Response) => {
   try {
     const user_id = parseInt(req.params.user_id);
@@ -162,7 +212,6 @@ export const getOrdersByUserId = async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'Invalid user ID' });
     }
 
-    // Check if user exists
     const user = await db
       .select()
       .from(usersTable)
@@ -174,22 +223,37 @@ export const getOrdersByUserId = async (req: Request, res: Response) => {
     }
 
     const orders = await db
-      .select()
+      .select({
+        order: ordersTable,
+      })
       .from(ordersTable)
-      .leftJoin(productsTable, eq(ordersTable.product_id, productsTable.id))
       .where(eq(ordersTable.user_id, user_id));
 
-    const formattedOrders = orders.map(order => ({
-      id: order.orders.id,
-      quantity: order.orders.quantity,
-      order_date: order.orders.order_date,
-      product: {
-        id: order.products?.id,
-        name: order.products?.name,
-        price: order.products?.price,
-        description: order.products?.description
-      }
-    }));
+    const ordersWithProducts = await Promise.all(
+      orders.map(async (orderData) => {
+        const orderProducts = await db
+          .select({
+            product: productsTable,
+            quantity: orderProductsTable.quantity,
+          })
+          .from(orderProductsTable)
+          .where(eq(orderProductsTable.order_id, orderData.order.id))
+          .leftJoin(productsTable, eq(orderProductsTable.product_id, productsTable.id));
+
+        return {
+          id: orderData.order.id,
+          user_address: orderData.order.user_address,
+          order_date: orderData.order.order_date,
+          products: orderProducts.map(op => ({
+            id: op.product?.id,
+            name: op.product?.name,
+            price: op.product?.price,
+            description: op.product?.description,
+            quantity: op.quantity
+          }))
+        };
+      })
+    );
 
     return res.json({ 
       user: {
@@ -197,7 +261,7 @@ export const getOrdersByUserId = async (req: Request, res: Response) => {
         name: user[0].name,
         email: user[0].email
       },
-      orders: formattedOrders 
+      orders: ordersWithProducts 
     });
   } catch (error) {
     console.error('Get orders by user ID error:', error);
@@ -205,17 +269,15 @@ export const getOrdersByUserId = async (req: Request, res: Response) => {
   }
 }
 
-// Update order
 export const updateOrder = async (req: Request, res: Response) => {
   try {
     const order_id = parseInt(req.params.order_id);
-    const { product_id, user_id, quantity }: OrderUpdatePayload = req.body;
+    const { user_address }: OrderUpdatePayload = req.body;
 
     if (isNaN(order_id)) {
       return res.status(400).json({ error: 'Invalid order ID' });
     }
 
-    // Check if order exists
     const existingOrder = await db
       .select()
       .from(ordersTable)
@@ -226,45 +288,12 @@ export const updateOrder = async (req: Request, res: Response) => {
       return res.status(404).json({ error: 'Order not found' });
     }
 
-    // Prepare update data
-    const updateData: OrderUpdatePayload = {};
+    const updateData: Partial<typeof ordersTable.$inferInsert> = {};
     
-    if (product_id !== undefined) {
-      // Check if new product exists
-      const product = await db
-        .select()
-        .from(productsTable)
-        .where(eq(productsTable.id, product_id))
-        .limit(1);
-
-      if (product.length === 0) {
-        return res.status(404).json({ error: 'Product not found' });
-      }
-      updateData.product_id = product_id;
+    if (user_address !== undefined) {
+      updateData.user_address = user_address;
     }
 
-    if (user_id !== undefined) {
-      // Check if new user exists
-      const user = await db
-        .select()
-        .from(usersTable)
-        .where(eq(usersTable.id, user_id))
-        .limit(1);
-
-      if (user.length === 0) {
-        return res.status(404).json({ error: 'User not found' });
-      }
-      updateData.user_id = user_id;
-    }
-
-    if (quantity !== undefined) {
-      if (quantity <= 0) {
-        return res.status(400).json({ error: 'Quantity must be greater than 0' });
-      }
-      updateData.quantity = quantity;
-    }
-
-    // Update order
     const result = await db
       .update(ordersTable)
       .set(updateData)
@@ -282,16 +311,15 @@ export const updateOrder = async (req: Request, res: Response) => {
   }
 }
 
-// Delete order
-export const deleteOrder = async (req: Request, res: Response) => {
+export const addProductToOrder = async (req: Request, res: Response) => {
   try {
     const order_id = parseInt(req.params.order_id);
+    const { product_id, quantity }: OrderProduct = req.body;
 
     if (isNaN(order_id)) {
       return res.status(400).json({ error: 'Invalid order ID' });
     }
 
-    // Check if order exists
     const existingOrder = await db
       .select()
       .from(ordersTable)
@@ -302,10 +330,108 @@ export const deleteOrder = async (req: Request, res: Response) => {
       return res.status(404).json({ error: 'Order not found' });
     }
 
-    // Delete order
-    await db
-      .delete(ordersTable)
-      .where(eq(ordersTable.id, order_id));
+    const product = await db
+      .select()
+      .from(productsTable)
+      .where(eq(productsTable.id, product_id))
+      .limit(1);
+
+    if (product.length === 0) {
+      return res.status(404).json({ error: 'Product not found' });
+    }
+
+    const existingOrderProduct = await db
+      .select()
+      .from(orderProductsTable)
+      .where(
+        eq(orderProductsTable.order_id, order_id) &&
+        eq(orderProductsTable.product_id, product_id)
+      )
+      .limit(1);
+
+    if (existingOrderProduct.length > 0) {
+      return res.status(400).json({ error: 'Product already exists in this order' });
+    }
+
+    const result = await db
+      .insert(orderProductsTable)
+      .values({
+        order_id,
+        product_id,
+        quantity: quantity || 1,
+      })
+      .returning();
+
+    return res.status(201).json({
+      message: 'Product added to order successfully',
+      orderProduct: result[0]
+    });
+
+  } catch (error) {
+    console.error('Add product to order error:', error);
+    return res.status(500).json({ error: 'Failed to add product to order' });
+  }
+}
+
+export const removeProductFromOrder = async (req: Request, res: Response) => {
+  try {
+    const order_id = parseInt(req.params.order_id);
+    const product_id = parseInt(req.params.product_id);
+
+    if (isNaN(order_id) || isNaN(product_id)) {
+      return res.status(400).json({ error: 'Invalid order ID or product ID' });
+    }
+
+    const result = await db
+      .delete(orderProductsTable)
+      .where(
+        eq(orderProductsTable.order_id, order_id) &&
+        eq(orderProductsTable.product_id, product_id)
+      )
+      .returning();
+
+    if (result.length === 0) {
+      return res.status(404).json({ error: 'Product not found in order' });
+    }
+
+    return res.json({
+      message: 'Product removed from order successfully',
+      removedOrderProduct: result[0]
+    });
+
+  } catch (error) {
+    console.error('Remove product from order error:', error);
+    return res.status(500).json({ error: 'Failed to remove product from order' });
+  }
+}
+
+export const deleteOrder = async (req: Request, res: Response) => {
+  try {
+    const order_id = parseInt(req.params.order_id);
+
+    if (isNaN(order_id)) {
+      return res.status(400).json({ error: 'Invalid order ID' });
+    }
+
+    const existingOrder = await db
+      .select()
+      .from(ordersTable)
+      .where(eq(ordersTable.id, order_id))
+      .limit(1);
+
+    if (existingOrder.length === 0) {
+      return res.status(404).json({ error: 'Order not found' });
+    }
+
+    await db.transaction(async (tx) => {
+      await tx
+        .delete(orderProductsTable)
+        .where(eq(orderProductsTable.order_id, order_id));
+
+      await tx
+        .delete(ordersTable)
+        .where(eq(ordersTable.id, order_id));
+    });
 
     return res.json({ 
       message: 'Order deleted successfully',

@@ -36,6 +36,27 @@
       "when": 1760791754189,
       "tag": "0004_dusty_legion",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1760986906534,
+      "tag": "0005_cool_pretty_boy",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1760987100163,
+      "tag": "0006_married_paladin",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1760994507920,
+      "tag": "0007_charming_nekra",
+      "breakpoints": true
     }
   ]
 }

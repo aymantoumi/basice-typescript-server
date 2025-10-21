@@ -5,7 +5,7 @@ import { drizzle } from 'drizzle-orm/node-postgres';
 import { userRouter } from "./routers/userRouter.ts";
 import { productsRouter } from "./routers/productsRouter.ts";
 import { authRouter } from "./routers/authRouter.ts";
-import { ordersRouter } from "./routers/ordersRouter.ts";
+import ordersRouter  from "./routers/ordersRouter.ts";
 import dotenv from "dotenv";
 
 dotenv.config();

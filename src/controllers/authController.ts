@@ -68,7 +68,7 @@ export const signup = async (req: Request, res: Response) => {
         email: createdUser.email 
       },
       JWT_SECRET,
-      { expiresIn: '24h' }
+      { expiresIn: '8h' }
     );
 
     // Remove password from response
@@ -88,6 +88,7 @@ export const signup = async (req: Request, res: Response) => {
 
 export const login = async (req: Request, res: Response) => {
   try {
+    
     const { email, password }: LoginPayload = req.body;
 
     // Validate required fields
@@ -111,7 +112,7 @@ export const login = async (req: Request, res: Response) => {
     }
 
     const user = users[0];
-
+    
     // Verify password
     const isPasswordValid = await compare(password, user.password);
     if (!isPasswordValid) {
@@ -143,25 +144,6 @@ export const login = async (req: Request, res: Response) => {
     console.error('Login error:', error);
     res.status(500).json({ error: 'Failed to login' });
   }
-};
-
-// Middleware to verify JWT token
-export const authenticateToken = (req: Request, res: Response, next: Function) => {
-  const authHeader = req.headers['authorization'];
-  const token = authHeader && authHeader.split(' ')[1]; // Bearer TOKEN
-
-  if (!token) {
-    return res.status(401).json({ error: 'Access token required' });
-  }
-
-  jwt.verify(token, JWT_SECRET, (err: any, user: any) => {
-    if (err) {
-      return res.status(403).json({ error: 'Invalid or expired token' });
-    }
-    
-    (req as any).user = user;
-    next();
-  });
 };
 
 // Get current user profile (protected route)
