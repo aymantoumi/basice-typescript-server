@@ -1,26 +1,59 @@
 import express from 'express';
-import type { Request, Response, Application } from 'express';
+import passport from 'passport';
+import type { Application } from 'express';
 import 'dotenv/config';
-import { drizzle } from 'drizzle-orm/node-postgres';
 import { userRouter } from "./routers/userRouter.ts";
 import { productsRouter } from "./routers/productsRouter.ts";
 import { authRouter } from "./routers/authRouter.ts";
+import { authPassportRouter } from './routers/authPassport.ts';
+import session from 'express-session';
 import ordersRouter  from "./routers/ordersRouter.ts";
+import './utilities/passportUtility.ts'
 import dotenv from "dotenv";
+import cookieParser from "cookie-parser";
+import bodyParser from "body-parser";
+import csrf from "csurf";
+import cors from 'cors';
+
 
 dotenv.config();
 
-const db = drizzle(process.env.DATABASE_URL!);
 const port = process.env.PORT || 3000;
 
 const app: Application = express();
+const csrfProtection = csrf({ cookie: true });
 app.use(express.json());
 
-// Routes
-app.use('/auth', authRouter);
-app.use('/users', userRouter);
-app.use('/products', productsRouter);
-app.use('/orders', ordersRouter);
+app.use(cors({
+  origin: 'http://localhost:5173',
+  credentials: true, 
+}));
+
+app.use(cookieParser());
+app.use(bodyParser.urlencoded({ extended: false }));
+app.use(csrfProtection);
+
+// Session configuration
+app.use(session({
+  secret: process.env.SESSION_SECRET || 'my-secret-key',
+  resave: false,
+  saveUninitialized: false,
+  cookie: { secure: false } 
+}));
+
+// Initialize Passport
+app.use(passport.initialize());
+app.use(passport.session());
+
+app.get('/api/csrf-token', csrfProtection, (req, res) => {
+  res.json({ csrfToken: req.csrfToken() });
+});
+
+app.use('/auth', csrfProtection, authRouter);
+app.use('/users', csrfProtection, userRouter);
+app.use('/products', csrfProtection, productsRouter);
+app.use('/orders', csrfProtection, ordersRouter);
+app.use('/passport', csrfProtection, authPassportRouter);
 
 app.listen(port, () => {
   console.log(`Server running on http://localhost:${port}`);

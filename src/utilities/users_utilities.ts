@@ -4,7 +4,7 @@ import { usersTable } from "../db/schema.ts";
 
 
 const db = drizzle(process.env.DATABASE_URL!);
-const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key';
+const JWT_SECRET = process.env.JWT_SECRET || 'my-secret-key';
 
 
 // Get current user profile (protected route)

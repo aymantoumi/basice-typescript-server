@@ -32,7 +32,7 @@ step() {
 generate_unique_email() {
     local timestamp=$(date +%s)
     local random=$(echo $RANDOM | md5sum | head -c 5)
-    echo "testuser_${timestamp}_${random}@example.com"
+    echo "testuser_${random}@example.com"
 }
 
 cleanup() {

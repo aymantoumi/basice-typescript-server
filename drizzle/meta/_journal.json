@@ -57,6 +57,13 @@
       "when": 1760994507920,
       "tag": "0007_charming_nekra",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1761076883586,
+      "tag": "0008_spotty_blob",
+      "breakpoints": true
     }
   ]
 }

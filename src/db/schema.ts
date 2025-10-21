@@ -1,12 +1,18 @@
-import { integer, pgTable, varchar, timestamp } from "drizzle-orm/pg-core";
+import { integer, pgTable, varchar, timestamp, serial, text, boolean } from "drizzle-orm/pg-core";
 import { relations } from "drizzle-orm";
 
-export const usersTable = pgTable("users", {
-  id: integer().primaryKey().generatedAlwaysAsIdentity(),
-  name: varchar({ length: 255 }).notNull(),
-  age: integer().notNull(),
-  password: varchar().notNull(),
-  email: varchar({ length: 255 }).notNull().unique(),
+export const usersTable = pgTable('users', {
+  id: serial('id').primaryKey(),
+  name: varchar('name', { length: 255 }).notNull(),
+  email: varchar('email', { length: 255 }).notNull().unique(),
+  password: varchar('password', { length: 255 }),
+  age: integer('age'),
+  googleId: varchar('google_id', { length: 255 }), 
+  avatar: text('avatar'), 
+  emailVerified: boolean('email_verified').default(false), 
+  authProvider: varchar('auth_provider', { length: 50 }).default('local'), 
+  createdAt: timestamp('created_at').defaultNow(),
+  updatedAt: timestamp('updated_at').defaultNow(),
 });
 
 export const productsTable = pgTable("products", {

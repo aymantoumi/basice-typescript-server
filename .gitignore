@@ -2,3 +2,6 @@ node_modules
 
 .env 
 
+test_cases.sh
+
+cockies_test/*

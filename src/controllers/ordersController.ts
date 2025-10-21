@@ -5,11 +5,11 @@ import { eq } from "drizzle-orm";
 import jwt from 'jsonwebtoken';
 
 const db = drizzle(process.env.DATABASE_URL!);
-const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key';
+const JWT_SECRET = process.env.JWT_SECRET || 'my-secret-key';
 
 interface OrderProduct {
   product_id: number;
-  quantity?: number || 1;
+  quantity?: number;
 }
 
 interface CreateOrderRequest {
