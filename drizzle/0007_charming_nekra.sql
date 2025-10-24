@@ -1,1 +1,0 @@
-ALTER TABLE "order_products" ADD COLUMN "quantity" integer DEFAULT 1 NOT NULL;

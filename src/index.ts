@@ -2,6 +2,7 @@ import express from 'express';
 import passport from 'passport';
 import type { Application } from 'express';
 import 'dotenv/config';
+import { verificationRouter } from './routers/verificationRouter.ts';
 import { userRouter } from "./routers/userRouter.ts";
 import { productsRouter } from "./routers/productsRouter.ts";
 import { authRouter } from "./routers/authRouter.ts";
@@ -15,45 +16,61 @@ import bodyParser from "body-parser";
 import csrf from "csurf";
 import cors from 'cors';
 
-
 dotenv.config();
 
-const port = process.env.PORT || 3000;
+const port = process.env.PORT || 3500;
 
 const app: Application = express();
-const csrfProtection = csrf({ cookie: true });
-app.use(express.json());
 
+// CORS 
 app.use(cors({
   origin: 'http://localhost:5173',
   credentials: true, 
 }));
 
+app.use(express.json());
 app.use(cookieParser());
 app.use(bodyParser.urlencoded({ extended: false }));
-app.use(csrfProtection);
 
 // Session configuration
 app.use(session({
   secret: process.env.SESSION_SECRET || 'my-secret-key',
   resave: false,
   saveUninitialized: false,
-  cookie: { secure: false } 
+  cookie: { 
+    // true if using HTTPS false for HTTP 
+    secure: false, 
+    httpOnly: true,
+    maxAge: 24 * 60 * 60 * 1000 
+  } 
 }));
 
-// Initialize Passport
+// CSRF protection 
+const csrfProtection = csrf({ 
+  cookie: {
+    httpOnly: true,
+    secure: false 
+  }
+});
+app.use(csrfProtection);
+
+// Initialize Passport 
 app.use(passport.initialize());
 app.use(passport.session());
 
+
+// CSRF token endpoint
 app.get('/api/csrf-token', csrfProtection, (req, res) => {
   res.json({ csrfToken: req.csrfToken() });
 });
 
+// Routes with CSRF protection
 app.use('/auth', csrfProtection, authRouter);
 app.use('/users', csrfProtection, userRouter);
 app.use('/products', csrfProtection, productsRouter);
 app.use('/orders', csrfProtection, ordersRouter);
 app.use('/passport', csrfProtection, authPassportRouter);
+app.use('/verify', verificationRouter)
 
 app.listen(port, () => {
   console.log(`Server running on http://localhost:${port}`);

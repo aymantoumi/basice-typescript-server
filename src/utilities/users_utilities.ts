@@ -1,4 +1,5 @@
 import { eq } from 'drizzle-orm';
+import { drizzle } from 'drizzle-orm/node-postgres';
 import type { Request, Response, Application } from 'express';
 import { usersTable } from "../db/schema.ts";
 

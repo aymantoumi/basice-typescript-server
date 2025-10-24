@@ -1,23 +1,61 @@
 import type { Request, Response } from 'express';
-import { ordersTable, productsTable, usersTable, orderProductsTable } from "../db/schema.ts";
+import { 
+  ordersTable, 
+  productsTable, 
+  usersTable, 
+  orderItemsTable, 
+  productVariantsTable,
+  orderStatusEnum,
+  paymentStatusEnum 
+} from "../db/schema.ts";
 import { drizzle } from "drizzle-orm/node-postgres";
-import { eq } from "drizzle-orm";
+import { eq, and } from "drizzle-orm";
 import jwt from 'jsonwebtoken';
 
 const db = drizzle(process.env.DATABASE_URL!);
 const JWT_SECRET = process.env.JWT_SECRET || 'my-secret-key';
 
-interface OrderProduct {
-  product_id: number;
-  quantity?: number;
+interface OrderItem {
+  productId: number;
+  variantId?: number;
+  quantity: number;
 }
 
 interface CreateOrderRequest {
-  user_address: string;
-  products: OrderProduct[];
+  customerEmail: string;
+  customerPhone?: string;
+  shippingAddress: {
+    firstName: string;
+    lastName: string;
+    address1: string;
+    address2?: string;
+    city: string;
+    state: string;
+    zipCode: string;
+    country: string;
+  };
+  billingAddress?: {
+    firstName: string;
+    lastName: string;
+    address1: string;
+    address2?: string;
+    city: string;
+    state: string;
+    zipCode: string;
+    country: string;
+  };
+  items: OrderItem[];
+  shippingMethod?: string;
+  paymentMethod?: string;
 }
 
-type OrderUpdatePayload = Partial<CreateOrderRequest>;
+type OrderUpdatePayload = Partial<{
+  status: string;
+  paymentStatus: string;
+  shippingAddress: any;
+  trackingNumber: string;
+  shippingMethod: string;
+}>;
 
 function getUserIdFromToken(req: Request): number | null {
   const authHeader = req.headers['authorization'];
@@ -35,6 +73,10 @@ function getUserIdFromToken(req: Request): number | null {
   }
 }
 
+function generateOrderNumber(): string {
+  return `ORD-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+}
+
 export const createOrder = async (req: Request, res: Response) => {
   try {
     const userId = getUserIdFromToken(req);
@@ -43,47 +85,159 @@ export const createOrder = async (req: Request, res: Response) => {
       return res.status(401).json({ error: "User not authenticated" });
     }
 
-    const { user_address, products }: CreateOrderRequest = req.body;
+    const { 
+      customerEmail, 
+      customerPhone, 
+      shippingAddress, 
+      billingAddress, 
+      items, 
+      shippingMethod, 
+      paymentMethod 
+    }: CreateOrderRequest = req.body;
 
-    if (!user_address || !products || !Array.isArray(products) || products.length === 0) {
+    if (!customerEmail || !shippingAddress || !items || !Array.isArray(items) || items.length === 0) {
       return res.status(400).json({ 
-        error: "User address and products array are required" 
+        error: "Customer email, shipping address, and items array are required" 
       });
     }
 
-    const productIds = products.map(p => p.product_id);
-    const existingProducts = await db
-      .select()
-      .from(productsTable)
-      .where(eq(productsTable.id, productIds[0]));
-
-    if (existingProducts.length === 0) {
-      return res.status(404).json({ error: "One or more products not found" });
+    const { firstName, lastName, address1, city, state, zipCode, country } = shippingAddress;
+    if (!firstName || !lastName || !address1 || !city || !state || !zipCode || !country) {
+      return res.status(400).json({ 
+        error: "Complete shipping address is required" 
+      });
     }
 
+    let subtotal = 0;
+    const orderItems = [];
+
+    for (const item of items) {
+      let product: any;
+      let price = 0;
+
+      if (item.variantId) {
+        const variants = await db
+          .select()
+          .from(productVariantsTable)
+          .where(eq(productVariantsTable.id, item.variantId))
+          .limit(1);
+
+        if (variants.length === 0) {
+          return res.status(404).json({ error: `Variant with ID ${item.variantId} not found` });
+        }
+
+        const variant = variants[0];
+        product = await db
+          .select()
+          .from(productsTable)
+          .where(eq(productsTable.id, variant.productId))
+          .limit(1);
+
+        if (product.length === 0) {
+          return res.status(404).json({ error: `Product for variant ${item.variantId} not found` });
+        }
+
+        price = parseFloat(variant.price?.toString() || '0');
+      } else {
+        const products = await db
+          .select()
+          .from(productsTable)
+          .where(eq(productsTable.id, item.productId))
+          .limit(1);
+
+        if (products.length === 0) {
+          return res.status(404).json({ error: `Product with ID ${item.productId} not found` });
+        }
+
+        product = products[0];
+        price = parseFloat(product.price?.toString() || '0');
+      }
+
+      if (product.trackQuantity && product.quantity < item.quantity && !product.allowBackorder) {
+        return res.status(400).json({ 
+          error: `Insufficient inventory for product ${product.name}` 
+        });
+      }
+
+      const itemTotal = price * item.quantity;
+      subtotal += itemTotal;
+
+      orderItems.push({
+        productId: item.productId,
+        variantId: item.variantId,
+        productName: product.name,
+        productSku: product.sku,
+        variantOptions: item.variantId ? {} : undefined, 
+        quantity: item.quantity,
+        price: price.toString(),
+        comparePrice: product.comparePrice?.toString(),
+      });
+    }
+
+    const taxAmount = subtotal * 0.1;x
+    const shippingAmount = 10.00; 
+    const total = subtotal + taxAmount + shippingAmount;
+
     const result = await db.transaction(async (tx) => {
+      // Create order
       const [newOrder] = await tx
         .insert(ordersTable)
         .values({
-          user_id: userId,
-          user_address: user_address,
+          orderNumber: generateOrderNumber(),
+          userId: userId,
+          customerEmail,
+          customerPhone,
+          shippingAddress,
+          billingAddress: billingAddress || shippingAddress,
+          subtotal: subtotal.toString(),
+          taxAmount: taxAmount.toString(),
+          shippingAmount: shippingAmount.toString(),
+          total: total.toString(),
+          shippingMethod,
+          paymentMethod,
+          status: 'pending',
+          paymentStatus: 'pending',
         })
         .returning();
 
-      const orderProductsData = products.map(product => ({
-        order_id: newOrder.id,
-        product_id: product.product_id,
-        quantity: product.quantity || 1,
+      const orderItemsData = orderItems.map(item => ({
+        orderId: newOrder.id,
+        productId: item.productId,
+        variantId: item.variantId,
+        productName: item.productName,
+        productSku: item.productSku,
+        variantOptions: item.variantOptions,
+        quantity: item.quantity,
+        price: item.price,
+        comparePrice: item.comparePrice,
       }));
 
-      const insertedOrderProducts = await tx
-        .insert(orderProductsTable)
-        .values(orderProductsData)
+      const insertedOrderItems = await tx
+        .insert(orderItemsTable)
+        .values(orderItemsData)
         .returning();
+
+      for (const item of items) {
+        if (item.variantId) {
+          await tx
+            .update(productVariantsTable)
+            .set({ 
+              quantity: productVariantsTable.quantity - item.quantity 
+            })
+            .where(eq(productVariantsTable.id, item.variantId));
+        } else {
+          await tx
+            .update(productsTable)
+            .set({ 
+              quantity: productsTable.quantity - item.quantity 
+            })
+            .where(eq(productsTable.id, item.productId));
+        }
+      }
 
       return {
         order: newOrder,
-        orderProducts: insertedOrderProducts,
+        orderItems: insertedOrderItems,
       };
     });
 
@@ -108,40 +262,53 @@ export const getAllOrders = async (req: Request, res: Response) => {
         user: usersTable,
       })
       .from(ordersTable)
-      .leftJoin(usersTable, eq(ordersTable.user_id, usersTable.id));
+      .leftJoin(usersTable, eq(ordersTable.userId, usersTable.id));
 
-    const ordersWithProducts = await Promise.all(
+    const ordersWithItems = await Promise.all(
       orders.map(async (orderData) => {
-        const orderProducts = await db
-          .select({
-            product: productsTable,
-            quantity: orderProductsTable.quantity,
-          })
-          .from(orderProductsTable)
-          .where(eq(orderProductsTable.order_id, orderData.order.id))
-          .leftJoin(productsTable, eq(orderProductsTable.product_id, productsTable.id));
+        const orderItems = await db
+          .select()
+          .from(orderItemsTable)
+          .where(eq(orderItemsTable.orderId, orderData.order.id))
+          .leftJoin(productsTable, eq(orderItemsTable.productId, productsTable.id))
+          .leftJoin(productVariantsTable, eq(orderItemsTable.variantId, productVariantsTable.id));
 
         return {
           id: orderData.order.id,
-          user_address: orderData.order.user_address,
-          order_date: orderData.order.order_date,
+          orderNumber: orderData.order.orderNumber,
+          status: orderData.order.status,
+          paymentStatus: orderData.order.paymentStatus,
+          total: orderData.order.total,
+          orderDate: orderData.order.orderDate,
+          customerEmail: orderData.order.customerEmail,
+          shippingAddress: orderData.order.shippingAddress,
           user: orderData.user ? {
             id: orderData.user.id,
             name: orderData.user.name,
             email: orderData.user.email
           } : null,
-          products: orderProducts.map(op => ({
-            id: op.product?.id,
-            name: op.product?.name,
-            price: op.product?.price,
-            description: op.product?.description,
-            quantity: op.quantity
+          items: orderItems.map(oi => ({
+            id: oi.order_items.id,
+            productName: oi.order_items.productName,
+            productSku: oi.order_items.productSku,
+            variantOptions: oi.order_items.variantOptions,
+            quantity: oi.order_items.quantity,
+            price: oi.order_items.price,
+            product: oi.products ? {
+              id: oi.products.id,
+              name: oi.products.name,
+              mainImage: oi.products.mainImage,
+            } : null,
+            variant: oi.product_variants ? {
+              id: oi.product_variants.id,
+              options: oi.product_variants.options,
+            } : null,
           }))
         };
       })
     );
 
-    return res.json({ orders: ordersWithProducts });
+    return res.json({ orders: ordersWithItems });
   } catch (error) {
     console.error('Get all orders error:', error);
     return res.status(500).json({ error: 'Failed to fetch orders' });
@@ -162,7 +329,7 @@ export const getOrderById = async (req: Request, res: Response) => {
         user: usersTable,
       })
       .from(ordersTable)
-      .leftJoin(usersTable, eq(ordersTable.user_id, usersTable.id))
+      .leftJoin(usersTable, eq(ordersTable.userId, usersTable.id))
       .where(eq(ordersTable.id, order_id))
       .limit(1);
 
@@ -170,30 +337,53 @@ export const getOrderById = async (req: Request, res: Response) => {
       return res.status(404).json({ error: 'Order not found' });
     }
 
-    const orderProducts = await db
-      .select({
-        product: productsTable,
-        quantity: orderProductsTable.quantity,
-      })
-      .from(orderProductsTable)
-      .where(eq(orderProductsTable.order_id, order_id))
-      .leftJoin(productsTable, eq(orderProductsTable.product_id, productsTable.id));
+    const orderItems = await db
+      .select()
+      .from(orderItemsTable)
+      .where(eq(orderItemsTable.orderId, order_id))
+      .leftJoin(productsTable, eq(orderItemsTable.productId, productsTable.id))
+      .leftJoin(productVariantsTable, eq(orderItemsTable.variantId, productVariantsTable.id));
 
     const formattedOrder = {
       id: orderData[0].order.id,
-      user_address: orderData[0].order.user_address,
-      order_date: orderData[0].order.order_date,
+      orderNumber: orderData[0].order.orderNumber,
+      status: orderData[0].order.status,
+      paymentStatus: orderData[0].order.paymentStatus,
+      subtotal: orderData[0].order.subtotal,
+      taxAmount: orderData[0].order.taxAmount,
+      shippingAmount: orderData[0].order.shippingAmount,
+      total: orderData[0].order.total,
+      orderDate: orderData[0].order.orderDate,
+      customerEmail: orderData[0].order.customerEmail,
+      customerPhone: orderData[0].order.customerPhone,
+      shippingAddress: orderData[0].order.shippingAddress,
+      billingAddress: orderData[0].order.billingAddress,
+      shippingMethod: orderData[0].order.shippingMethod,
+      paymentMethod: orderData[0].order.paymentMethod,
+      trackingNumber: orderData[0].order.trackingNumber,
       user: orderData[0].user ? {
         id: orderData[0].user.id,
         name: orderData[0].user.name,
         email: orderData[0].user.email
       } : null,
-      products: orderProducts.map(op => ({
-        id: op.product?.id,
-        name: op.product?.name,
-        price: op.product?.price,
-        description: op.product?.description,
-        quantity: op.quantity
+      items: orderItems.map(oi => ({
+        id: oi.order_items.id,
+        productName: oi.order_items.productName,
+        productSku: oi.order_items.productSku,
+        variantOptions: oi.order_items.variantOptions,
+        quantity: oi.order_items.quantity,
+        price: oi.order_items.price,
+        comparePrice: oi.order_items.comparePrice,
+        product: oi.products ? {
+          id: oi.products.id,
+          name: oi.products.name,
+          description: oi.products.description,
+          mainImage: oi.products.mainImage,
+        } : null,
+        variant: oi.product_variants ? {
+          id: oi.product_variants.id,
+          options: oi.product_variants.options,
+        } : null,
       }))
     };
 
@@ -223,33 +413,36 @@ export const getOrdersByUserId = async (req: Request, res: Response) => {
     }
 
     const orders = await db
-      .select({
-        order: ordersTable,
-      })
+      .select()
       .from(ordersTable)
-      .where(eq(ordersTable.user_id, user_id));
+      .where(eq(ordersTable.userId, user_id))
+      .orderBy(ordersTable.orderDate);
 
-    const ordersWithProducts = await Promise.all(
-      orders.map(async (orderData) => {
-        const orderProducts = await db
-          .select({
-            product: productsTable,
-            quantity: orderProductsTable.quantity,
-          })
-          .from(orderProductsTable)
-          .where(eq(orderProductsTable.order_id, orderData.order.id))
-          .leftJoin(productsTable, eq(orderProductsTable.product_id, productsTable.id));
+    const ordersWithItems = await Promise.all(
+      orders.map(async (order) => {
+        const orderItems = await db
+          .select()
+          .from(orderItemsTable)
+          .where(eq(orderItemsTable.orderId, order.id))
+          .leftJoin(productsTable, eq(orderItemsTable.productId, productsTable.id));
 
         return {
-          id: orderData.order.id,
-          user_address: orderData.order.user_address,
-          order_date: orderData.order.order_date,
-          products: orderProducts.map(op => ({
-            id: op.product?.id,
-            name: op.product?.name,
-            price: op.product?.price,
-            description: op.product?.description,
-            quantity: op.quantity
+          id: order.id,
+          orderNumber: order.orderNumber,
+          status: order.status,
+          paymentStatus: order.paymentStatus,
+          total: order.total,
+          orderDate: order.orderDate,
+          items: orderItems.map(oi => ({
+            id: oi.order_items.id,
+            productName: oi.order_items.productName,
+            quantity: oi.order_items.quantity,
+            price: oi.order_items.price,
+            product: oi.products ? {
+              id: oi.products.id,
+              name: oi.products.name,
+              mainImage: oi.products.mainImage,
+            } : null,
           }))
         };
       })
@@ -261,7 +454,7 @@ export const getOrdersByUserId = async (req: Request, res: Response) => {
         name: user[0].name,
         email: user[0].email
       },
-      orders: ordersWithProducts 
+      orders: ordersWithItems 
     });
   } catch (error) {
     console.error('Get orders by user ID error:', error);
@@ -272,7 +465,7 @@ export const getOrdersByUserId = async (req: Request, res: Response) => {
 export const updateOrder = async (req: Request, res: Response) => {
   try {
     const order_id = parseInt(req.params.order_id);
-    const { user_address }: OrderUpdatePayload = req.body;
+    const { status, paymentStatus, shippingAddress, trackingNumber, shippingMethod }: OrderUpdatePayload = req.body;
 
     if (isNaN(order_id)) {
       return res.status(400).json({ error: 'Invalid order ID' });
@@ -290,9 +483,36 @@ export const updateOrder = async (req: Request, res: Response) => {
 
     const updateData: Partial<typeof ordersTable.$inferInsert> = {};
     
-    if (user_address !== undefined) {
-      updateData.user_address = user_address;
+    if (status && Object.values(orderStatusEnum.enumValues).includes(status as any)) {
+      updateData.status = status as any;
     }
+    
+    if (paymentStatus && Object.values(paymentStatusEnum.enumValues).includes(paymentStatus as any)) {
+      updateData.paymentStatus = paymentStatus as any;
+    }
+    
+    if (shippingAddress) {
+      updateData.shippingAddress = shippingAddress;
+    }
+    
+    if (trackingNumber) {
+      updateData.trackingNumber = trackingNumber;
+    }
+    
+    if (shippingMethod) {
+      updateData.shippingMethod = shippingMethod;
+    }
+
+    // Set timestamps for status changes
+    if (status === 'shipped' && existingOrder[0].status !== 'shipped') {
+      updateData.shippedAt = new Date();
+    } else if (status === 'delivered' && existingOrder[0].status !== 'delivered') {
+      updateData.deliveredAt = new Date();
+    } else if (status === 'cancelled' && existingOrder[0].status !== 'cancelled') {
+      updateData.cancelledAt = new Date();
+    }
+
+    updateData.updatedAt = new Date();
 
     const result = await db
       .update(ordersTable)
@@ -314,7 +534,7 @@ export const updateOrder = async (req: Request, res: Response) => {
 export const addProductToOrder = async (req: Request, res: Response) => {
   try {
     const order_id = parseInt(req.params.order_id);
-    const { product_id, quantity }: OrderProduct = req.body;
+    const { productId, variantId, quantity }: OrderItem = req.body;
 
     if (isNaN(order_id)) {
       return res.status(400).json({ error: 'Invalid order ID' });
@@ -330,41 +550,93 @@ export const addProductToOrder = async (req: Request, res: Response) => {
       return res.status(404).json({ error: 'Order not found' });
     }
 
-    const product = await db
-      .select()
-      .from(productsTable)
-      .where(eq(productsTable.id, product_id))
-      .limit(1);
-
-    if (product.length === 0) {
-      return res.status(404).json({ error: 'Product not found' });
+    // Check if order can be modified
+    if (['shipped', 'delivered', 'cancelled'].includes(existingOrder[0].status!)) {
+      return res.status(400).json({ error: 'Cannot modify order in current status' });
     }
 
-    const existingOrderProduct = await db
+    let product: any;
+    let price = 0;
+    let productName = '';
+    let productSku = '';
+
+    if (variantId) {
+      const variants = await db
+        .select()
+        .from(productVariantsTable)
+        .where(eq(productVariantsTable.id, variantId))
+        .limit(1);
+
+      if (variants.length === 0) {
+        return res.status(404).json({ error: 'Variant not found' });
+      }
+
+      const variant = variants[0];
+      const products = await db
+        .select()
+        .from(productsTable)
+        .where(eq(productsTable.id, variant.productId))
+        .limit(1);
+
+      if (products.length === 0) {
+        return res.status(404).json({ error: 'Product not found' });
+      }
+
+      product = products[0];
+      price = parseFloat(variant.price?.toString() || '0');
+      productName = product.name;
+      productSku = variant.sku || product.sku || '';
+    } else {
+      const products = await db
+        .select()
+        .from(productsTable)
+        .where(eq(productsTable.id, productId))
+        .limit(1);
+
+      if (products.length === 0) {
+        return res.status(404).json({ error: 'Product not found' });
+      }
+
+      product = products[0];
+      price = parseFloat(product.price?.toString() || '0');
+      productName = product.name;
+      productSku = product.sku || '';
+    }
+
+    // Check if item already exists in order
+    const existingOrderItem = await db
       .select()
-      .from(orderProductsTable)
+      .from(orderItemsTable)
       .where(
-        eq(orderProductsTable.order_id, order_id) &&
-        eq(orderProductsTable.product_id, product_id)
+        and(
+          eq(orderItemsTable.orderId, order_id),
+          eq(orderItemsTable.productId, productId),
+          variantId ? eq(orderItemsTable.variantId, variantId) : undefined as any
+        )
       )
       .limit(1);
 
-    if (existingOrderProduct.length > 0) {
+    if (existingOrderItem.length > 0) {
       return res.status(400).json({ error: 'Product already exists in this order' });
     }
 
     const result = await db
-      .insert(orderProductsTable)
+      .insert(orderItemsTable)
       .values({
-        order_id,
-        product_id,
+        orderId: order_id,
+        productId,
+        variantId,
+        productName,
+        productSku,
         quantity: quantity || 1,
+        price: price.toString(),
+        comparePrice: product.comparePrice?.toString(),
       })
       .returning();
 
     return res.status(201).json({
       message: 'Product added to order successfully',
-      orderProduct: result[0]
+      orderItem: result[0]
     });
 
   } catch (error) {
@@ -376,27 +648,29 @@ export const addProductToOrder = async (req: Request, res: Response) => {
 export const removeProductFromOrder = async (req: Request, res: Response) => {
   try {
     const order_id = parseInt(req.params.order_id);
-    const product_id = parseInt(req.params.product_id);
+    const order_item_id = parseInt(req.params.order_item_id);
 
-    if (isNaN(order_id) || isNaN(product_id)) {
-      return res.status(400).json({ error: 'Invalid order ID or product ID' });
+    if (isNaN(order_id) || isNaN(order_item_id)) {
+      return res.status(400).json({ error: 'Invalid order ID or order item ID' });
     }
 
     const result = await db
-      .delete(orderProductsTable)
+      .delete(orderItemsTable)
       .where(
-        eq(orderProductsTable.order_id, order_id) &&
-        eq(orderProductsTable.product_id, product_id)
+        and(
+          eq(orderItemsTable.orderId, order_id),
+          eq(orderItemsTable.id, order_item_id)
+        )
       )
       .returning();
 
     if (result.length === 0) {
-      return res.status(404).json({ error: 'Product not found in order' });
+      return res.status(404).json({ error: 'Order item not found' });
     }
 
     return res.json({
       message: 'Product removed from order successfully',
-      removedOrderProduct: result[0]
+      removedOrderItem: result[0]
     });
 
   } catch (error) {
@@ -425,8 +699,8 @@ export const deleteOrder = async (req: Request, res: Response) => {
 
     await db.transaction(async (tx) => {
       await tx
-        .delete(orderProductsTable)
-        .where(eq(orderProductsTable.order_id, order_id));
+        .delete(orderItemsTable)
+        .where(eq(orderItemsTable.orderId, order_id));
 
       await tx
         .delete(ordersTable)

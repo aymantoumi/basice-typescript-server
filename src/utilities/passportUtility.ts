@@ -1,7 +1,7 @@
 import passport from "passport";
 import { Strategy as LocalStrategy } from "passport-local";
 import { Strategy as GoogleStrategy } from "passport-google-oauth20";
-import { hash, compare } from 'bcryptjs';
+import { compare } from 'bcryptjs';
 import { usersTable } from '../db/schema.ts';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import { eq } from 'drizzle-orm';
@@ -93,11 +93,12 @@ passport.use(
           googleId: profile.id,
           name: profile.displayName,
           email: profile.emails![0].value,
-          password: null, // No password for Google auth
+          password: null,
           avatar: profile.photos?.[0]?.value,
           age: null,
-          emailVerified: true, // Google emails are verified
-          authProvider: 'google' // Track auth method
+          // Google emails are verified
+          emailVerified: true, 
+          authProvider: 'google'
         };
 
         const result = await db

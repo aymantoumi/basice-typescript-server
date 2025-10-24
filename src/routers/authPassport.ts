@@ -4,7 +4,8 @@ import {
   passportLogout,
   checkAuth,
   googleAuth,
-  googleCallback 
+  googleCallback,
+  updateProfile 
 } from '../controllers/authPassPortController.ts';
 
 const authPassportRouter = express.Router();
@@ -13,6 +14,7 @@ const authPassportRouter = express.Router();
 authPassportRouter.post('/login', passportLogin);
 authPassportRouter.post('/logout', passportLogout);
 authPassportRouter.get('/check-auth', checkAuth);
+authPassportRouter.put('/profile', updateProfile);
 
 // Google OAuth routes
 authPassportRouter.get('/google', googleAuth);

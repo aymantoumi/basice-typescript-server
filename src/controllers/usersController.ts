@@ -12,8 +12,6 @@ type UserPayload = Partial<{
 const db = drizzle(process.env.DATABASE_URL!);
 
 export async function createUser(req: any, res: any) {
-  console.log(`password => ${req.body.password}`);
-        
   const { name, email, password, age } = req.body;
 
   try {
