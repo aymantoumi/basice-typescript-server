@@ -1,7 +1,7 @@
 import type { Request, Response } from 'express';
 import jwt from 'jsonwebtoken';
 import { hash, compare } from 'bcryptjs';
-import { usersTable } from "../db/schema.ts";
+import { users } from "../db/schema.ts"; 
 import { drizzle } from 'drizzle-orm/node-postgres';
 import { eq } from 'drizzle-orm';
 import { transporter, createEmailConfig } from '../utilities/tokenUtility.ts';
@@ -13,8 +13,6 @@ interface SignupPayload {
   name: string;
   email: string;
   password: string;
-  age?: number;
-  avatar?: string;
 }
 
 interface LoginPayload {
@@ -24,7 +22,7 @@ interface LoginPayload {
 
 export const signup = async (req: Request, res: Response) => {
   try {
-    const { name, email, password, age, avatar }: SignupPayload = req.body;
+    const { name, email, password }: SignupPayload = req.body;
 
     // Validate required fields
     if (!name || !email || !password) {
@@ -36,8 +34,8 @@ export const signup = async (req: Request, res: Response) => {
     // Check if user already exists
     const existingUsers = await db
       .select()
-      .from(usersTable)
-      .where(eq(usersTable.email, email))
+      .from(users)
+      .where(eq(users.email, email))
       .limit(1);
 
     if (existingUsers.length > 0) {
@@ -49,18 +47,14 @@ export const signup = async (req: Request, res: Response) => {
     // Hash password
     const hashedPassword = await hash(password, 12);
 
-    // Create user with new schema fields
-    const user: typeof usersTable.$inferInsert = {
+    // Create user with simplified schema
+    const user = {
       name,
       email,
       password: hashedPassword,
-      age: age || null,
-      avatar: avatar || null,
-      authProvider: 'local',
-      emailVerified: false,
     };
 
-    const result = await db.insert(usersTable)
+    const result = await db.insert(users)
       .values(user)
       .returning();
 
@@ -131,26 +125,19 @@ export const login = async (req: Request, res: Response) => {
     }
 
     // Find user by email
-    const users = await db
+    const userResults = await db
       .select()
-      .from(usersTable)
-      .where(eq(usersTable.email, email))
+      .from(users)
+      .where(eq(users.email, email))
       .limit(1);
 
-    if (users.length === 0) {
+    if (userResults.length === 0) {
       return res.status(401).json({
         error: 'Invalid email or password'
       });
     }
 
-    const user = users[0];
-
-    // Check if user is verified
-    if (!user.emailVerified) {
-      return res.status(403).json({
-        error: 'Please verify your email before logging in'
-      });
-    }
+    const user = userResults[0];
 
     // Verify password
     const isPasswordValid = await compare(password, user.password);
@@ -190,32 +177,65 @@ export const getProfile = async (req: Request, res: Response) => {
   try {
     const user = (req as any).user;
 
-    const users = await db
+    const userResults = await db
       .select({
-        id: usersTable.id,
-        name: usersTable.name,
-        email: usersTable.email,
-        age: usersTable.age,
-        avatar: usersTable.avatar,
-        googleId: usersTable.googleId,
-        emailVerified: usersTable.emailVerified,
-        authProvider: usersTable.authProvider,
-        createdAt: usersTable.createdAt,
-        updatedAt: usersTable.updatedAt,
+        id: users.id,
+        name: users.name,
+        email: users.email,
+        createdAt: users.createdAt,
       })
-      .from(usersTable)
-      .where(eq(usersTable.id, user.userId))
+      .from(users)
+      .where(eq(users.id, user.userId))
       .limit(1);
 
-    if (users.length === 0) {
+    if (userResults.length === 0) {
       return res.status(404).json({ error: 'User not found' });
     }
 
-    const userData = users[0];
+    const userData = userResults[0];
     res.json({ user: userData });
 
   } catch (error) {
     console.error('Get profile error:', error);
     res.status(500).json({ error: 'Failed to get profile' });
+  }
+};
+
+// Update user profile
+export const updateProfile = async (req: Request, res: Response) => {
+  try {
+    const user = (req as any).user;
+    const { name, email } = req.body;
+
+    const updateData: any = {};
+    if (name) updateData.name = name;
+    if (email) updateData.email = email;
+
+    const result = await db
+      .update(users)
+      .set(updateData)
+      .where(eq(users.id, user.userId))
+      .returning();
+
+    if (result.length === 0) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    const updatedUser = result[0];
+    const { password: _, ...userWithoutPassword } = updatedUser;
+
+    res.json({
+      message: 'Profile updated successfully',
+      user: userWithoutPassword
+    });
+
+  } catch (error: any) {
+    console.error('Update profile error:', error);
+    
+    if (error.code === '23505') {
+      return res.status(409).json({ error: 'Email already exists' });
+    }
+    
+    res.status(500).json({ error: 'Failed to update profile' });
   }
 };

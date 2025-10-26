@@ -1,6 +1,6 @@
 import type { Request, Response } from 'express';
 import jwt from 'jsonwebtoken';
-import { usersTable } from "../db/schema.ts";
+import { users } from "../db/schema.ts";
 import { drizzle } from 'drizzle-orm/node-postgres';
 import { eq } from 'drizzle-orm';
 
@@ -24,8 +24,8 @@ export const verifyEmail = async (req: Request, res: Response) => {
     // Check if user exists
     const existingUsers = await db
       .select()
-      .from(usersTable)
-      .where(eq(usersTable.id, decoded.userId))
+      .from(users)
+      .where(eq(users.id, decoded.userId))
       .limit(1);
 
     if (existingUsers.length === 0) {
@@ -37,9 +37,9 @@ export const verifyEmail = async (req: Request, res: Response) => {
     console.log('User found:', user.email);
 
     // FIX: Use the correct column name - emailVerified (camelCase)
-    await db.update(usersTable)
+    await db.update(users)
       .set({ emailVerified: true }) // ← Changed from email_verified to emailVerified
-      .where(eq(usersTable.id, decoded.userId));
+      .where(eq(users.id, decoded.userId));
 
     console.log('Email verified successfully for:', user.email);
 
@@ -75,8 +75,8 @@ export const resendVerification = async (req: Request, res: Response) => {
     // Check if user exists
     const existingUsers = await db
       .select()
-      .from(usersTable)
-      .where(eq(usersTable.email, email))
+      .from(users)
+      .where(eq(users.email, email))
       .limit(1);
 
     if (existingUsers.length === 0) {

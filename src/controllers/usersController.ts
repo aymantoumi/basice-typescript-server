@@ -1,6 +1,6 @@
 import { drizzle } from 'drizzle-orm/node-postgres';
 import { eq } from 'drizzle-orm'
-import { usersTable } from "../db/schema.ts";
+import { users } from "../db/schema.ts";
 
 type UserPayload = Partial<{
   name?: string;
@@ -15,14 +15,14 @@ export async function createUser(req: any, res: any) {
   const { name, email, password, age } = req.body;
 
   try {
-    const user: typeof usersTable.$inferInsert = {
+    const user: typeof users.$inferInsert = {
       name: name,
       age: age,
       email: email,
       password: password, 
     }
 
-    const result = await db.insert(usersTable).values(user).returning();
+    const result = await db.insert(users).values(user).returning();
     const createdUser = result[0];
 
     res.status(201).json({
@@ -45,7 +45,7 @@ export async function getUserById(req: any, res: any) {
   }
 
   try {
-    const users = await db.select().from(usersTable).where(eq(usersTable.id, user_id));
+    const users = await db.select().from(users).where(eq(users.id, user_id));
     
     if (users.length === 0) {
       return res.status(404).json({ error: 'User not found' });
@@ -69,7 +69,7 @@ export async function updateUser(req: any, res: any) {
   }
 
   try {
-    const existingUsers = await db.select().from(usersTable).where(eq(usersTable.id, user_id));
+    const existingUsers = await db.select().from(users).where(eq(users.id, user_id));
     
     if (existingUsers.length === 0) {
       return res.status(404).json({ error: 'User not found' });
@@ -82,9 +82,9 @@ export async function updateUser(req: any, res: any) {
     if (password !== undefined) updateData.password = password;
     if (age !== undefined) updateData.age = age;
 
-    const updatedUsers = await db.update(usersTable)
+    const updatedUsers = await db.update(users)
       .set(updateData)
-      .where(eq(usersTable.id, user_id))
+      .where(eq(users.id, user_id))
       .returning();
 
     const updatedUser = updatedUsers[0];
@@ -108,13 +108,13 @@ export async function deleteUser(req: any, res: any) {
   }
 
   try {
-    const existingUsers = await db.select().from(usersTable).where(eq(usersTable.id, user_id));
+    const existingUsers = await db.select().from(users).where(eq(users.id, user_id));
     
     if (existingUsers.length === 0) {
       return res.status(404).json({ error: 'User not found' });
     }
 
-    await db.delete(usersTable).where(eq(usersTable.id, user_id));
+    await db.delete(users).where(eq(users.id, user_id));
 
     res.json({ 
       message: 'User deleted successfully',
@@ -129,7 +129,7 @@ export async function deleteUser(req: any, res: any) {
 
 export async function getAllUsers(req: any, res: any) {
   try {
-    const users = await db.select().from(usersTable);
+    const users = await db.select().from(users);
     res.json({ users });
   } catch (error) {
     console.error(error);

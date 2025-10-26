@@ -1,12 +1,9 @@
 import type { Request, Response } from 'express';
 import { 
-  ordersTable, 
-  productsTable, 
-  usersTable, 
-  orderItemsTable, 
-  productVariantsTable,
-  orderStatusEnum,
-  paymentStatusEnum 
+  orders, 
+  products, 
+  users, 
+  orderItems 
 } from "../db/schema.ts";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { eq, and } from "drizzle-orm";
@@ -17,45 +14,13 @@ const JWT_SECRET = process.env.JWT_SECRET || 'my-secret-key';
 
 interface OrderItem {
   productId: number;
-  variantId?: number;
   quantity: number;
 }
 
 interface CreateOrderRequest {
   customerEmail: string;
-  customerPhone?: string;
-  shippingAddress: {
-    firstName: string;
-    lastName: string;
-    address1: string;
-    address2?: string;
-    city: string;
-    state: string;
-    zipCode: string;
-    country: string;
-  };
-  billingAddress?: {
-    firstName: string;
-    lastName: string;
-    address1: string;
-    address2?: string;
-    city: string;
-    state: string;
-    zipCode: string;
-    country: string;
-  };
   items: OrderItem[];
-  shippingMethod?: string;
-  paymentMethod?: string;
 }
-
-type OrderUpdatePayload = Partial<{
-  status: string;
-  paymentStatus: string;
-  shippingAddress: any;
-  trackingNumber: string;
-  shippingMethod: string;
-}>;
 
 function getUserIdFromToken(req: Request): number | null {
   const authHeader = req.headers['authorization'];
@@ -85,154 +50,88 @@ export const createOrder = async (req: Request, res: Response) => {
       return res.status(401).json({ error: "User not authenticated" });
     }
 
-    const { 
-      customerEmail, 
-      customerPhone, 
-      shippingAddress, 
-      billingAddress, 
-      items, 
-      shippingMethod, 
-      paymentMethod 
-    }: CreateOrderRequest = req.body;
+    const { customerEmail, items }: CreateOrderRequest = req.body;
 
-    if (!customerEmail || !shippingAddress || !items || !Array.isArray(items) || items.length === 0) {
+    if (!customerEmail || !items || !Array.isArray(items) || items.length === 0) {
       return res.status(400).json({ 
-        error: "Customer email, shipping address, and items array are required" 
-      });
-    }
-
-    const { firstName, lastName, address1, city, state, zipCode, country } = shippingAddress;
-    if (!firstName || !lastName || !address1 || !city || !state || !zipCode || !country) {
-      return res.status(400).json({ 
-        error: "Complete shipping address is required" 
+        error: "Customer email and items array are required" 
       });
     }
 
     let subtotal = 0;
-    const orderItems = [];
+    const orderItemsData = [];
 
+    // Validate products and calculate total
     for (const item of items) {
-      let product: any;
-      let price = 0;
+      const productResults = await db
+        .select()
+        .from(products)
+        .where(eq(products.id, item.productId))
+        .limit(1);
 
-      if (item.variantId) {
-        const variants = await db
-          .select()
-          .from(productVariantsTable)
-          .where(eq(productVariantsTable.id, item.variantId))
-          .limit(1);
-
-        if (variants.length === 0) {
-          return res.status(404).json({ error: `Variant with ID ${item.variantId} not found` });
-        }
-
-        const variant = variants[0];
-        product = await db
-          .select()
-          .from(productsTable)
-          .where(eq(productsTable.id, variant.productId))
-          .limit(1);
-
-        if (product.length === 0) {
-          return res.status(404).json({ error: `Product for variant ${item.variantId} not found` });
-        }
-
-        price = parseFloat(variant.price?.toString() || '0');
-      } else {
-        const products = await db
-          .select()
-          .from(productsTable)
-          .where(eq(productsTable.id, item.productId))
-          .limit(1);
-
-        if (products.length === 0) {
-          return res.status(404).json({ error: `Product with ID ${item.productId} not found` });
-        }
-
-        product = products[0];
-        price = parseFloat(product.price?.toString() || '0');
+      if (productResults.length === 0) {
+        return res.status(404).json({ error: `Product with ID ${item.productId} not found` });
       }
 
-      if (product.trackQuantity && product.quantity < item.quantity && !product.allowBackorder) {
+      const product = productResults[0];
+
+      // Check inventory
+      if (product.quantity < item.quantity) {
         return res.status(400).json({ 
           error: `Insufficient inventory for product ${product.name}` 
         });
       }
 
+      const price = parseFloat(product.price?.toString() || '0');
       const itemTotal = price * item.quantity;
       subtotal += itemTotal;
 
-      orderItems.push({
+      orderItemsData.push({
         productId: item.productId,
-        variantId: item.variantId,
         productName: product.name,
-        productSku: product.sku,
-        variantOptions: item.variantId ? {} : undefined, 
         quantity: item.quantity,
         price: price.toString(),
-        comparePrice: product.comparePrice?.toString(),
       });
     }
 
-    const taxAmount = subtotal * 0.1;x
+    const taxAmount = subtotal * 0.1;
     const shippingAmount = 10.00; 
     const total = subtotal + taxAmount + shippingAmount;
 
     const result = await db.transaction(async (tx) => {
       // Create order
       const [newOrder] = await tx
-        .insert(ordersTable)
+        .insert(orders)
         .values({
-          orderNumber: generateOrderNumber(),
           userId: userId,
           customerEmail,
-          customerPhone,
-          shippingAddress,
-          billingAddress: billingAddress || shippingAddress,
           subtotal: subtotal.toString(),
           taxAmount: taxAmount.toString(),
           shippingAmount: shippingAmount.toString(),
           total: total.toString(),
-          shippingMethod,
-          paymentMethod,
           status: 'pending',
-          paymentStatus: 'pending',
         })
         .returning();
 
-      const orderItemsData = orderItems.map(item => ({
+      // Create order items
+      const orderItemsWithOrderId = orderItemsData.map(item => ({
+        ...item,
         orderId: newOrder.id,
-        productId: item.productId,
-        variantId: item.variantId,
-        productName: item.productName,
-        productSku: item.productSku,
-        variantOptions: item.variantOptions,
-        quantity: item.quantity,
-        price: item.price,
-        comparePrice: item.comparePrice,
       }));
 
       const insertedOrderItems = await tx
-        .insert(orderItemsTable)
-        .values(orderItemsData)
+        .insert(orderItems)
+        .values(orderItemsWithOrderId)
         .returning();
 
+      // Update product quantities
       for (const item of items) {
-        if (item.variantId) {
-          await tx
-            .update(productVariantsTable)
-            .set({ 
-              quantity: productVariantsTable.quantity - item.quantity 
-            })
-            .where(eq(productVariantsTable.id, item.variantId));
-        } else {
-          await tx
-            .update(productsTable)
-            .set({ 
-              quantity: productsTable.quantity - item.quantity 
-            })
-            .where(eq(productsTable.id, item.productId));
-        }
+        await tx
+          .update(products)
+          .set({ 
+            quantity: products.quantity - item.quantity 
+          })
+          .where(eq(products.id, item.productId));
       }
 
       return {
@@ -254,54 +153,42 @@ export const createOrder = async (req: Request, res: Response) => {
 
 export const getAllOrders = async (req: Request, res: Response) => {
   try {
-    const userId = getUserIdFromToken(req);
-    
-    const orders = await db
+    const ordersData = await db
       .select({
-        order: ordersTable,
-        user: usersTable,
+        order: orders,
+        user: users,
       })
-      .from(ordersTable)
-      .leftJoin(usersTable, eq(ordersTable.userId, usersTable.id));
+      .from(orders)
+      .leftJoin(users, eq(orders.userId, users.id));
 
     const ordersWithItems = await Promise.all(
-      orders.map(async (orderData) => {
-        const orderItems = await db
+      ordersData.map(async (orderData) => {
+        const orderItemsData = await db
           .select()
-          .from(orderItemsTable)
-          .where(eq(orderItemsTable.orderId, orderData.order.id))
-          .leftJoin(productsTable, eq(orderItemsTable.productId, productsTable.id))
-          .leftJoin(productVariantsTable, eq(orderItemsTable.variantId, productVariantsTable.id));
+          .from(orderItems)
+          .where(eq(orderItems.orderId, orderData.order.id))
+          .leftJoin(products, eq(orderItems.productId, products.id));
 
         return {
           id: orderData.order.id,
-          orderNumber: orderData.order.orderNumber,
           status: orderData.order.status,
-          paymentStatus: orderData.order.paymentStatus,
           total: orderData.order.total,
-          orderDate: orderData.order.orderDate,
+          orderDate: orderData.order.createdAt,
           customerEmail: orderData.order.customerEmail,
-          shippingAddress: orderData.order.shippingAddress,
           user: orderData.user ? {
             id: orderData.user.id,
             name: orderData.user.name,
             email: orderData.user.email
           } : null,
-          items: orderItems.map(oi => ({
+          items: orderItemsData.map(oi => ({
             id: oi.order_items.id,
             productName: oi.order_items.productName,
-            productSku: oi.order_items.productSku,
-            variantOptions: oi.order_items.variantOptions,
             quantity: oi.order_items.quantity,
             price: oi.order_items.price,
             product: oi.products ? {
               id: oi.products.id,
               name: oi.products.name,
-              mainImage: oi.products.mainImage,
-            } : null,
-            variant: oi.product_variants ? {
-              id: oi.product_variants.id,
-              options: oi.product_variants.options,
+              image: oi.products.image,
             } : null,
           }))
         };
@@ -325,64 +212,48 @@ export const getOrderById = async (req: Request, res: Response) => {
 
     const orderData = await db
       .select({
-        order: ordersTable,
-        user: usersTable,
+        order: orders,
+        user: users,
       })
-      .from(ordersTable)
-      .leftJoin(usersTable, eq(ordersTable.userId, usersTable.id))
-      .where(eq(ordersTable.id, order_id))
+      .from(orders)
+      .leftJoin(users, eq(orders.userId, users.id))
+      .where(eq(orders.id, order_id))
       .limit(1);
 
     if (orderData.length === 0) {
       return res.status(404).json({ error: 'Order not found' });
     }
 
-    const orderItems = await db
+    const orderItemsData = await db
       .select()
-      .from(orderItemsTable)
-      .where(eq(orderItemsTable.orderId, order_id))
-      .leftJoin(productsTable, eq(orderItemsTable.productId, productsTable.id))
-      .leftJoin(productVariantsTable, eq(orderItemsTable.variantId, productVariantsTable.id));
+      .from(orderItems)
+      .where(eq(orderItems.orderId, order_id))
+      .leftJoin(products, eq(orderItems.productId, products.id));
 
     const formattedOrder = {
       id: orderData[0].order.id,
-      orderNumber: orderData[0].order.orderNumber,
       status: orderData[0].order.status,
-      paymentStatus: orderData[0].order.paymentStatus,
       subtotal: orderData[0].order.subtotal,
       taxAmount: orderData[0].order.taxAmount,
       shippingAmount: orderData[0].order.shippingAmount,
       total: orderData[0].order.total,
-      orderDate: orderData[0].order.orderDate,
+      orderDate: orderData[0].order.createdAt,
       customerEmail: orderData[0].order.customerEmail,
-      customerPhone: orderData[0].order.customerPhone,
-      shippingAddress: orderData[0].order.shippingAddress,
-      billingAddress: orderData[0].order.billingAddress,
-      shippingMethod: orderData[0].order.shippingMethod,
-      paymentMethod: orderData[0].order.paymentMethod,
-      trackingNumber: orderData[0].order.trackingNumber,
       user: orderData[0].user ? {
         id: orderData[0].user.id,
         name: orderData[0].user.name,
         email: orderData[0].user.email
       } : null,
-      items: orderItems.map(oi => ({
+      items: orderItemsData.map(oi => ({
         id: oi.order_items.id,
         productName: oi.order_items.productName,
-        productSku: oi.order_items.productSku,
-        variantOptions: oi.order_items.variantOptions,
         quantity: oi.order_items.quantity,
         price: oi.order_items.price,
-        comparePrice: oi.order_items.comparePrice,
         product: oi.products ? {
           id: oi.products.id,
           name: oi.products.name,
           description: oi.products.description,
-          mainImage: oi.products.mainImage,
-        } : null,
-        variant: oi.product_variants ? {
-          id: oi.product_variants.id,
-          options: oi.product_variants.options,
+          image: oi.products.image,
         } : null,
       }))
     };
@@ -404,36 +275,34 @@ export const getOrdersByUserId = async (req: Request, res: Response) => {
 
     const user = await db
       .select()
-      .from(usersTable)
-      .where(eq(usersTable.id, user_id))
+      .from(users)
+      .where(eq(users.id, user_id))
       .limit(1);
 
     if (user.length === 0) {
       return res.status(404).json({ error: 'User not found' });
     }
 
-    const orders = await db
+    const ordersData = await db
       .select()
-      .from(ordersTable)
-      .where(eq(ordersTable.userId, user_id))
-      .orderBy(ordersTable.orderDate);
+      .from(orders)
+      .where(eq(orders.userId, user_id))
+      .orderBy(orders.createdAt);
 
     const ordersWithItems = await Promise.all(
-      orders.map(async (order) => {
-        const orderItems = await db
+      ordersData.map(async (order) => {
+        const orderItemsData = await db
           .select()
-          .from(orderItemsTable)
-          .where(eq(orderItemsTable.orderId, order.id))
-          .leftJoin(productsTable, eq(orderItemsTable.productId, productsTable.id));
+          .from(orderItems)
+          .where(eq(orderItems.orderId, order.id))
+          .leftJoin(products, eq(orderItems.productId, products.id));
 
         return {
           id: order.id,
-          orderNumber: order.orderNumber,
           status: order.status,
-          paymentStatus: order.paymentStatus,
           total: order.total,
-          orderDate: order.orderDate,
-          items: orderItems.map(oi => ({
+          orderDate: order.createdAt,
+          items: orderItemsData.map(oi => ({
             id: oi.order_items.id,
             productName: oi.order_items.productName,
             quantity: oi.order_items.quantity,
@@ -441,7 +310,7 @@ export const getOrdersByUserId = async (req: Request, res: Response) => {
             product: oi.products ? {
               id: oi.products.id,
               name: oi.products.name,
-              mainImage: oi.products.mainImage,
+              image: oi.products.image,
             } : null,
           }))
         };
@@ -465,7 +334,7 @@ export const getOrdersByUserId = async (req: Request, res: Response) => {
 export const updateOrder = async (req: Request, res: Response) => {
   try {
     const order_id = parseInt(req.params.order_id);
-    const { status, paymentStatus, shippingAddress, trackingNumber, shippingMethod }: OrderUpdatePayload = req.body;
+    const { status }: { status?: string } = req.body;
 
     if (isNaN(order_id)) {
       return res.status(400).json({ error: 'Invalid order ID' });
@@ -473,51 +342,26 @@ export const updateOrder = async (req: Request, res: Response) => {
 
     const existingOrder = await db
       .select()
-      .from(ordersTable)
-      .where(eq(ordersTable.id, order_id))
+      .from(orders)
+      .where(eq(orders.id, order_id))
       .limit(1);
 
     if (existingOrder.length === 0) {
       return res.status(404).json({ error: 'Order not found' });
     }
 
-    const updateData: Partial<typeof ordersTable.$inferInsert> = {};
+    const updateData: any = {};
     
-    if (status && Object.values(orderStatusEnum.enumValues).includes(status as any)) {
-      updateData.status = status as any;
-    }
-    
-    if (paymentStatus && Object.values(paymentStatusEnum.enumValues).includes(paymentStatus as any)) {
-      updateData.paymentStatus = paymentStatus as any;
-    }
-    
-    if (shippingAddress) {
-      updateData.shippingAddress = shippingAddress;
-    }
-    
-    if (trackingNumber) {
-      updateData.trackingNumber = trackingNumber;
-    }
-    
-    if (shippingMethod) {
-      updateData.shippingMethod = shippingMethod;
-    }
-
-    // Set timestamps for status changes
-    if (status === 'shipped' && existingOrder[0].status !== 'shipped') {
-      updateData.shippedAt = new Date();
-    } else if (status === 'delivered' && existingOrder[0].status !== 'delivered') {
-      updateData.deliveredAt = new Date();
-    } else if (status === 'cancelled' && existingOrder[0].status !== 'cancelled') {
-      updateData.cancelledAt = new Date();
+    if (status && ['pending', 'confirmed', 'shipped', 'delivered', 'cancelled'].includes(status)) {
+      updateData.status = status;
     }
 
     updateData.updatedAt = new Date();
 
     const result = await db
-      .update(ordersTable)
+      .update(orders)
       .set(updateData)
-      .where(eq(ordersTable.id, order_id))
+      .where(eq(orders.id, order_id))
       .returning();
 
     return res.json({
@@ -534,7 +378,7 @@ export const updateOrder = async (req: Request, res: Response) => {
 export const addProductToOrder = async (req: Request, res: Response) => {
   try {
     const order_id = parseInt(req.params.order_id);
-    const { productId, variantId, quantity }: OrderItem = req.body;
+    const { productId, quantity }: OrderItem = req.body;
 
     if (isNaN(order_id)) {
       return res.status(400).json({ error: 'Invalid order ID' });
@@ -542,8 +386,8 @@ export const addProductToOrder = async (req: Request, res: Response) => {
 
     const existingOrder = await db
       .select()
-      .from(ordersTable)
-      .where(eq(ordersTable.id, order_id))
+      .from(orders)
+      .where(eq(orders.id, order_id))
       .limit(1);
 
     if (existingOrder.length === 0) {
@@ -555,63 +399,27 @@ export const addProductToOrder = async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'Cannot modify order in current status' });
     }
 
-    let product: any;
-    let price = 0;
-    let productName = '';
-    let productSku = '';
+    const productResults = await db
+      .select()
+      .from(products)
+      .where(eq(products.id, productId))
+      .limit(1);
 
-    if (variantId) {
-      const variants = await db
-        .select()
-        .from(productVariantsTable)
-        .where(eq(productVariantsTable.id, variantId))
-        .limit(1);
-
-      if (variants.length === 0) {
-        return res.status(404).json({ error: 'Variant not found' });
-      }
-
-      const variant = variants[0];
-      const products = await db
-        .select()
-        .from(productsTable)
-        .where(eq(productsTable.id, variant.productId))
-        .limit(1);
-
-      if (products.length === 0) {
-        return res.status(404).json({ error: 'Product not found' });
-      }
-
-      product = products[0];
-      price = parseFloat(variant.price?.toString() || '0');
-      productName = product.name;
-      productSku = variant.sku || product.sku || '';
-    } else {
-      const products = await db
-        .select()
-        .from(productsTable)
-        .where(eq(productsTable.id, productId))
-        .limit(1);
-
-      if (products.length === 0) {
-        return res.status(404).json({ error: 'Product not found' });
-      }
-
-      product = products[0];
-      price = parseFloat(product.price?.toString() || '0');
-      productName = product.name;
-      productSku = product.sku || '';
+    if (productResults.length === 0) {
+      return res.status(404).json({ error: 'Product not found' });
     }
+
+    const product = productResults[0];
+    const price = parseFloat(product.price?.toString() || '0');
 
     // Check if item already exists in order
     const existingOrderItem = await db
       .select()
-      .from(orderItemsTable)
+      .from(orderItems)
       .where(
         and(
-          eq(orderItemsTable.orderId, order_id),
-          eq(orderItemsTable.productId, productId),
-          variantId ? eq(orderItemsTable.variantId, variantId) : undefined as any
+          eq(orderItems.orderId, order_id),
+          eq(orderItems.productId, productId)
         )
       )
       .limit(1);
@@ -621,16 +429,13 @@ export const addProductToOrder = async (req: Request, res: Response) => {
     }
 
     const result = await db
-      .insert(orderItemsTable)
+      .insert(orderItems)
       .values({
         orderId: order_id,
         productId,
-        variantId,
-        productName,
-        productSku,
+        productName: product.name,
         quantity: quantity || 1,
         price: price.toString(),
-        comparePrice: product.comparePrice?.toString(),
       })
       .returning();
 
@@ -655,11 +460,11 @@ export const removeProductFromOrder = async (req: Request, res: Response) => {
     }
 
     const result = await db
-      .delete(orderItemsTable)
+      .delete(orderItems)
       .where(
         and(
-          eq(orderItemsTable.orderId, order_id),
-          eq(orderItemsTable.id, order_item_id)
+          eq(orderItems.orderId, order_id),
+          eq(orderItems.id, order_item_id)
         )
       )
       .returning();
@@ -689,8 +494,8 @@ export const deleteOrder = async (req: Request, res: Response) => {
 
     const existingOrder = await db
       .select()
-      .from(ordersTable)
-      .where(eq(ordersTable.id, order_id))
+      .from(orders)
+      .where(eq(orders.id, order_id))
       .limit(1);
 
     if (existingOrder.length === 0) {
@@ -699,12 +504,12 @@ export const deleteOrder = async (req: Request, res: Response) => {
 
     await db.transaction(async (tx) => {
       await tx
-        .delete(orderItemsTable)
-        .where(eq(orderItemsTable.orderId, order_id));
+        .delete(orderItems)
+        .where(eq(orderItems.orderId, order_id));
 
       await tx
-        .delete(ordersTable)
-        .where(eq(ordersTable.id, order_id));
+        .delete(orders)
+        .where(eq(orders.id, order_id));
     });
 
     return res.json({ 

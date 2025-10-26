@@ -10,7 +10,7 @@ import {
   deleteOrder
 } from '../controllers/ordersController.ts';
 
-import { authenticateToken } from '../middleware/authMiddleware.ts'
+import { authenticateToken } from '../middleware/authMiddleware.ts';
 
 const ordersRouter = Router();
 

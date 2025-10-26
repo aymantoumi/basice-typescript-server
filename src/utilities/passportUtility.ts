@@ -2,7 +2,7 @@ import passport from "passport";
 import { Strategy as LocalStrategy } from "passport-local";
 import { Strategy as GoogleStrategy } from "passport-google-oauth20";
 import { compare } from 'bcryptjs';
-import { usersTable } from '../db/schema.ts';
+import { users } from '../db/schema.ts';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import { eq } from 'drizzle-orm';
 import dotenv from "dotenv";
@@ -19,8 +19,8 @@ passport.use(
     },
     async (email: string, password: string, done) => {
       try {
-        const users = await db.select().from(usersTable).where(
-          eq(usersTable.email, email)
+        const users = await db.select().from(users).where(
+          eq(users.email, email)
         ).limit(1);
 
         if (users.length === 0) {
@@ -57,8 +57,8 @@ passport.use(
         // Check if user already exists with this Google ID
         const existingUsers = await db
           .select()
-          .from(usersTable)
-          .where(eq(usersTable.googleId, profile.id))
+          .from(users)
+          .where(eq(users.googleId, profile.id))
           .limit(1);
 
         if (existingUsers.length > 0) {
@@ -68,21 +68,21 @@ passport.use(
         // Check if user exists with the same email but different auth method
         const usersByEmail = await db
           .select()
-          .from(usersTable)
-          .where(eq(usersTable.email, profile.emails![0].value))
+          .from(users)
+          .where(eq(users.email, profile.emails![0].value))
           .limit(1);
 
         if (usersByEmail.length > 0) {
           // Update existing user with Google ID
           const updatedUsers = await db
-            .update(usersTable)
+            .update(users)
             .set({ 
               googleId: profile.id,
               // Optionally update other fields from Google profile
               name: profile.displayName,
               avatar: profile.photos?.[0]?.value 
             })
-            .where(eq(usersTable.id, usersByEmail[0].id))
+            .where(eq(users.id, usersByEmail[0].id))
             .returning();
 
           return done(null, updatedUsers[0]);
@@ -102,7 +102,7 @@ passport.use(
         };
 
         const result = await db
-          .insert(usersTable)
+          .insert(users)
           .values(newUser)
           .returning();
 
@@ -123,8 +123,8 @@ passport.serializeUser((user: any, done) => {
 // Deserialize user from session
 passport.deserializeUser(async (id: number, done) => {
   try {
-    const users = await db.select().from(usersTable).where(
-      eq(usersTable.id, id)
+    const users = await db.select().from(users).where(
+      eq(users.id, id)
     ).limit(1);
     
     if (users.length === 0) {

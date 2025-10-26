@@ -1,6 +1,6 @@
 import type { Request, Response, NextFunction } from 'express';
 import passport from 'passport';
-import { usersTable } from "../db/schema.ts";
+import { users } from "../db/schema.ts";
 import { drizzle } from 'drizzle-orm/node-postgres';
 import { eq } from 'drizzle-orm';
 
@@ -21,9 +21,6 @@ export function checkAuth(req: Request, res: Response) {
         id: user.id,
         email: user.email,
         name: user.name,
-        avatar: user.avatar,
-        emailVerified: user.emailVerified,
-        authProvider: user.authProvider,
         createdAt: user.createdAt
       }
     });
@@ -53,13 +50,6 @@ export async function passportLogin(req: Request, res: Response, next: NextFunct
       if (!user) {
         return res.status(401).json({
           error: info?.message || 'Authentication failed'
-        });
-      }
-
-      // Check if email is verified
-      if (!user.emailVerified) {
-        return res.status(403).json({
-          error: 'Please verify your email before logging in'
         });
       }
 
@@ -127,14 +117,12 @@ export const googleCallback = (req: Request, res: Response, next: NextFunction) 
       }
       
       try {
-        // Update user's last login or other metadata
-        await db.update(usersTable)
+        // Update user's last login
+        await db.update(users)
           .set({ 
-            updatedAt: new Date(),
-            // Auto-verify Google users if not already verified
-            emailVerified: true 
+            updatedAt: new Date()
           })
-          .where(eq(usersTable.id, user.id));
+          .where(eq(users.id, user.id));
           
         console.log('Google OAuth successful, redirecting to frontend...');
         return res.redirect(`http://localhost:5173/dashboard`);
@@ -154,29 +142,24 @@ export const updateProfile = async (req: Request, res: Response) => {
     }
 
     const user = req.user as any;
-    const { name, age, avatar } = req.body;
+    const { name, email } = req.body;
 
-    const updateData: Partial<typeof usersTable.$inferInsert> = {
+    const updateData: any = {
       updatedAt: new Date()
     };
 
     if (name !== undefined) updateData.name = name;
-    if (age !== undefined) updateData.age = age;
-    if (avatar !== undefined) updateData.avatar = avatar;
+    if (email !== undefined) updateData.email = email;
 
-    const updatedUsers = await db.update(usersTable)
+    const updatedUsers = await db.update(users)
       .set(updateData)
-      .where(eq(usersTable.id, user.id))
+      .where(eq(users.id, user.id))
       .returning({
-        id: usersTable.id,
-        name: usersTable.name,
-        email: usersTable.email,
-        age: usersTable.age,
-        avatar: usersTable.avatar,
-        emailVerified: usersTable.emailVerified,
-        authProvider: usersTable.authProvider,
-        createdAt: usersTable.createdAt,
-        updatedAt: usersTable.updatedAt,
+        id: users.id,
+        name: users.name,
+        email: users.email,
+        createdAt: users.createdAt,
+        updatedAt: users.updatedAt,
       });
 
     const updatedUser = updatedUsers[0];
@@ -191,6 +174,11 @@ export const updateProfile = async (req: Request, res: Response) => {
 
   } catch (error: any) {
     console.error('Update profile error:', error);
+    
+    if (error.code === '23505') {
+      return res.status(409).json({ error: 'Email already exists' });
+    }
+    
     res.status(500).json({ error: 'Failed to update profile' });
   }
 };
