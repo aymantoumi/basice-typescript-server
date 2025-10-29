@@ -1,8 +1,17 @@
-import express from 'express'
-import { stripeCheckOut } from '../controllers/stripController.ts'
+import express from 'express';
+import { 
+  stripeCheckOut, 
+  stripeWebhook,
+  getSessionStatus 
+} from '../controllers/stripController.ts';
 
-const stripeRouter = express.Router()
+const stripeRouter = express.Router();
 
-stripeRouter.post('/', stripeCheckOut);
+// Webhook needs raw body
+stripeRouter.post('/webhook', express.raw({type: 'application/json'}), stripeWebhook);
 
-export { stripeRouter }
+// Other routes use JSON
+stripeRouter.post('/create-checkout-session', express.json(), stripeCheckOut);
+stripeRouter.get('/session-status/:session_id', getSessionStatus);
+
+export { stripeRouter };

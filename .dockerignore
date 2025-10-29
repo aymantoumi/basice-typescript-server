@@ -1,0 +1,5 @@
+# Node modules - will be installed in container
+node_modules
+npm-debug.log*
+
+# you can include the environment 

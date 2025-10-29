@@ -1,0 +1,51 @@
+version: '3.8'
+
+services:
+  # PostgreSQL database service
+  postgres:
+    image: postgres:15-alpine
+    container_name: express-ts-postgres
+    environment:
+      POSTGRES_DB: shope_ease
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: root
+    ports:
+      - "5400:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./postgres-init:/docker-entrypoint-initdb.d
+    networks:
+      - app-network
+
+  # Your Express application service
+  app:
+    build: .
+    container_name: express-ts-app
+    ports:
+      - "3500:3500"
+    environment:
+      - DATABASE_URL=postgresql://postgres:root@postgres:5432/shope_ease
+      - NODE_ENV=development
+    volumes:
+      # Bind mount for live code reloading
+      - .:/app
+      - /app/node_modules
+    depends_on:
+      - postgres
+    networks:
+      - app-network
+    # Health check to ensure app is running
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3400/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+# Named volumes for data persistence
+volumes:
+  postgres_data:
+
+# Custom network for services to communicate
+networks:
+  app-network:
+    driver: bridge

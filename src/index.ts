@@ -52,24 +52,24 @@ const csrfProtection = csrf({
     secure: false 
   }
 });
-app.use(csrfProtection);
+// app.use(csrfProtection);
 
 // Initialize Passport 
 app.use(passport.initialize());
 app.use(passport.session());
 
 
-// CSRF token endpoint
-app.get('/api/csrf-token', csrfProtection, (req, res) => {
-  res.json({ csrfToken: req.csrfToken() });
-});
+// // CSRF token endpoint
+// app.get('/api/csrf-token', csrfProtection, (req, res) => {
+//   res.json({ csrfToken: req.csrfToken() });
+// });
 
 // Routes with CSRF protection
-app.use('/auth', csrfProtection, authRouter);
-app.use('/users', csrfProtection, userRouter);
-app.use('/products', csrfProtection, productsRouter);
-app.use('/orders', csrfProtection, ordersRouter);
-app.use('/passport', csrfProtection, authPassportRouter);
+app.use('/auth',  authRouter);
+app.use('/users',  userRouter);
+app.use('/products', productsRouter);
+app.use('/orders',  ordersRouter);
+app.use('/passport', authPassportRouter);
 app.use('/verify', verificationRouter)
 
 app.listen(port, () => {
