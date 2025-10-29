@@ -3,13 +3,13 @@ import { getAuth } from 'firebase/auth';
 import { getStorage } from 'firebase/storage';
 
 const firebaseConfig = {
-  apiKey: "AIzaSyCKB3zKrAUvWBJ3E83tLlLw5vGvfrOqX1E",
-  authDomain: "exam9-1.firebaseapp.com",
-  projectId: "exam9-1",
-  storageBucket: "exam9-1.appspot.com", 
-  messagingSenderId: "479705895775",
-  appId: "1:479705895775:web:49446745724018e8cd5cea",
-  measurementId: "G-0EGXDMH6KJ"
+  apiKey: "",
+  authDomain: "",
+  projectId: "",
+  storageBucket: "", 
+  messagingSenderId: "",
+  appId: "",
+  measurementId: ""
 };
 
 console.log('Firebase Config:', {
